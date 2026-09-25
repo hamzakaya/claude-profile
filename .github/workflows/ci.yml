@@ -17,7 +17,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: shellcheck
         run: shellcheck --version && make lint
       - name: Plugin version matches script
@@ -37,7 +37,7 @@ jobs:
     name: test (${{ matrix.os }}, ${{ matrix.bash }})
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Select bash
         run: |
           mkdir -p "$RUNNER_TEMP/bin"

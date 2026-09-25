@@ -276,12 +276,13 @@ menu_pick() {
 
 cmd_menu() {
   local -a names=() rows=() acts=() labels=()
-  local p acc def sel name
+  local p acc def sel name star
   def=$(default_profile)
   for p in $(profiles); do
     acc=$(account_of "$p")
+    if [[ $p == "$def" ]]; then star=" ${EY}★${ER}"; else star=''; fi
     names+=("$p")
-    rows+=("$(printf '%-16s %s%s' "$p" "${acc:-${ED}not logged in${ER}}" "$([[ $p == "$def" ]] && echo " ${EY}★${ER}" || true)")")
+    rows+=("$(printf '%-16s %s%s' "$p" "${acc:-${ED}not logged in${ER}}" "$star")")
   done
   names+=("+"); rows+=("${EC}+ add a profile${ER}")
   sel=$(menu_pick "Profile" "${rows[@]}") || exit 0
@@ -474,8 +475,10 @@ cmd_doctor() {
     done
   done
   echo
-  if (( issues == 0 )); then ok "All good$( (( fixed )) && echo " ($fixed fixed)" || true )."
-  else warn "$issues issue(s)$( (( fixed )) && echo ", $fixed fixed" || true )."; fi
+  local note=''
+  if (( fixed )); then note=" ($fixed fixed)"; fi
+  if (( issues == 0 )); then ok "All good$note."
+  else warn "$issues issue(s)$note."; fi
 }
 
 cfg_val() {
