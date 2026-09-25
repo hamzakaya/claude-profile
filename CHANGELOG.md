@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-26
+
 ### Fixed
 
 - Sessions weren't found in directories with non-ASCII characters (`ü`, `ş`, `İ`, …) in their path: the project folder name depended on the locale. It is now computed the way Claude Code does, whatever the locale.
@@ -34,5 +36,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Installer with checksum verification, Makefile, test suite, CI on Linux and macOS (bash 3.2 and 5).
 - Claude Code plugin and marketplace with a `claude-profile` skill for guided setup.
 
-[Unreleased]: https://github.com/hamzakaya/claude-profile/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/hamzakaya/claude-profile/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/hamzakaya/claude-profile/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/hamzakaya/claude-profile/releases/tag/v1.0.0

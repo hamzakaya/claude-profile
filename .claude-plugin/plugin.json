@@ -1,6 +1,6 @@
 {
   "name": "claude-profile",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Install and manage claude-profile: run Claude Code with several accounts side by side, sharing one conversation history.",
   "author": {
     "name": "Hamza KAYA",
