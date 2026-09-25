@@ -1,0 +1,15 @@
+{
+  "name": "claude-profile",
+  "description": "Multi-account tooling for Claude Code.",
+  "owner": {
+    "name": "Hamza KAYA",
+    "url": "https://github.com/hamzakaya"
+  },
+  "plugins": [
+    {
+      "name": "claude-profile",
+      "source": "./",
+      "description": "Install and manage claude-profile: run Claude Code with several accounts side by side, sharing one conversation history."
+    }
+  ]
+}

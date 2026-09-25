@@ -1,0 +1,40 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please **don't paste tokens, `.claude.json` contents or email addresses** you don't want public.
+        Security issues go through [private reporting](https://github.com/hamzakaya/claude-profile/security/advisories/new), not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you ran, what you expected, what you got.
+      placeholder: |
+        $ claude-profile add work
+        ...
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `claude-profile doctor`
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Fill in the output of each command.
+      value: |
+        claude-profile version:
+        claude --version:
+        bash --version | head -1:
+        jq --version:
+        OS (e.g. macOS 15, Ubuntu 24.04):
+        Shell (zsh / bash):
+    validations:
+      required: true

@@ -1,0 +1,573 @@
+#!/usr/bin/env bash
+# claude-profile — run Claude Code with several accounts side by side.
+#
+# Each profile keeps its own login (keychain/credentials + .claude.json), while conversation
+# history, settings, plugins, skills and hooks are shared with ~/.claude through symlinks,
+# so `--resume` works across accounts.
+#
+#   claude-profile                        interactive menu (↑↓/jk, enter, 1-9, q)
+#   claude-profile <name> [claude args]   start claude with a profile (= use <name> ...)
+#       claude-profile work -c            continue the latest conversation here as "work"
+#       claude-profile personal -r <id>   resume a specific session as "personal"
+#   claude-profile -c | -r <id> ...       start claude with the default profile
+#   claude-profile list | which           list profiles | show this shell's profile
+#   claude-profile add <name>             create a profile and log in
+#   claude-profile default [name]         show / set the profile plain `claude` uses
+#   claude-profile config [key [value]]   show / change settings (see below)
+#   claude-profile sessions [n]           last n sessions in this directory
+#   claude-profile status [name]          login status (all profiles in parallel, or one)
+#   claude-profile login | logout <name>  refresh / remove a profile's login
+#   claude-profile rename <old> <new>     rename a profile (you'll log in again)
+#   claude-profile rm <name>              delete a profile (asks first; history is kept)
+#   claude-profile sync [name]            copy MCP servers + project settings from main
+#   claude-profile doctor                 check the setup and repair missing links
+#   claude-profile shell-init             for ~/.zshrc or ~/.bashrc:
+#                                           eval "$(claude-profile shell-init)"
+#   claude-profile version                print the version
+#
+# Settings (~/.config/claude-profile/config):
+#   main       profile name of the original ~/.claude               default: main
+#   default    profile used by plain `claude` / `claude-profile -c` default: <main>
+#   open       `claude-profile <name>` with no args: new|continue|pick  default: new
+#   auto-sync  run `sync` whenever a profile starts: on|off         default: off
+#   share      extra ~/.claude items to share, space-separated      default: (none)
+#
+# NO_COLOR=1 disables colors.
+set -euo pipefail
+
+PROG=claude-profile
+VERSION=1.0.0
+MAIN_DIR="$HOME/.claude"
+MAIN_JSON="$HOME/.claude.json"
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/$PROG/config"
+MARK=.claude-profile   # only ~/.claude-* directories containing this file count as profiles
+SHARED=(projects settings.json agents commands skills hooks plugins plans output-styles
+        file-history history.jsonl tasks todos keybindings.json CLAUDE.md)
+KEYS=(main default open auto-sync share)
+RESERVED=" list ls which current add new use default config sessions s status login logout rename mv rm remove sync doctor shell-init help profile version "
+
+# ── output ─────────────────────────────────────────────────────────────────────────
+if [[ -t 1 && -z ${NO_COLOR:-} ]]; then
+  B=$'\e[1m' D=$'\e[2m' R=$'\e[0m' G=$'\e[32m' Y=$'\e[33m' C=$'\e[36m'
+else B='' D='' R='' G='' Y='' C=''; fi
+if [[ -t 2 && -z ${NO_COLOR:-} ]]; then
+  EB=$'\e[1m' ED=$'\e[2m' ER=$'\e[0m' ERED=$'\e[31m' EY=$'\e[33m' EC=$'\e[36m'
+else EB='' ED='' ER='' ERED='' EY='' EC=''; fi
+
+ok()   { printf '%s✓%s %s\n' "$G" "$R" "$*"; }
+info() { printf '%s›%s %s\n' "$C" "$R" "$*"; }
+warn() { printf '%s!%s %s\n' "$EY" "$ER" "$*" >&2; }
+die()  { printf '%s✗%s %s\n' "$ERED" "$ER" "$*" >&2; exit 1; }
+
+command -v jq >/dev/null || die "jq is required (e.g. brew install jq / apt install jq)."
+need_claude()    { command -v claude >/dev/null || die "claude is not on PATH."; }
+need_main_json() { [[ -f $MAIN_JSON ]] || die "$MAIN_JSON not found — run plain 'claude' and log in once."; }
+
+# ── settings ───────────────────────────────────────────────────────────────────────
+MAIN_NAME=main DEF='' OPEN=new AUTOSYNC=off SHARE=''
+if [[ -f $CONF ]]; then
+  while IFS='=' read -r k v || [[ -n ${k:-} ]]; do
+    case $k in
+      main) MAIN_NAME=$v ;; default) DEF=$v ;; open) OPEN=$v ;;
+      auto-sync) AUTOSYNC=$v ;; share) SHARE=$v ;;
+    esac
+  done < "$CONF"
+fi
+[[ $MAIN_NAME =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "$CONF is invalid: main='$MAIN_NAME'"
+
+valid_share_item() {   # plain names inside ~/.claude; never the login files
+  [[ $1 =~ ^[A-Za-z0-9._-]+$ && $1 != . && $1 != .. && $1 != .credentials.json && $1 != .claude.json && $1 != "$MARK" ]]
+}
+for item in $SHARE; do
+  if valid_share_item "$item"; then SHARED+=("$item"); else warn "share: ignoring '$item'"; fi
+done
+
+save_cfg() {
+  mkdir -p "${CONF%/*}"
+  local tmp; tmp=$(mktemp "$CONF.XXXXXX")
+  printf 'main=%s\ndefault=%s\nopen=%s\nauto-sync=%s\nshare=%s\n' \
+    "$MAIN_NAME" "$DEF" "$OPEN" "$AUTOSYNC" "$SHARE" > "$tmp"
+  mv "$tmp" "$CONF"
+}
+
+# ── profiles ───────────────────────────────────────────────────────────────────────
+dir_for()  { if [[ $1 == "$MAIN_NAME" ]]; then echo "$MAIN_DIR"; else echo "$HOME/.claude-$1"; fi; }
+json_for() { if [[ $1 == "$MAIN_NAME" ]]; then echo "$MAIN_JSON"; else echo "$HOME/.claude-$1/.claude.json"; fi; }
+exists()   { [[ $1 == "$MAIN_NAME" || -f $HOME/.claude-$1/$MARK ]]; }
+
+profiles() {
+  local d
+  echo "$MAIN_NAME"
+  for d in "$HOME"/.claude-*; do
+    [[ -f $d/$MARK ]] && echo "${d##*/.claude-}"
+  done
+  return 0
+}
+profile_list() { profiles | tr '\n' ' '; }
+
+need() {
+  [[ -n ${1:-} ]] || die "profile name required  (available: $(profile_list))"
+  exists "$1" || die "No such profile: $1  (create: $PROG add $1 · available: $(profile_list))"
+}
+
+check_name() {
+  [[ $1 =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "Invalid name: '$1' (lowercase letters, digits, dashes)"
+  [[ $RESERVED != *" $1 "* ]] || die "'$1' is a command name and can't be a profile name."
+}
+valid_name() {
+  check_name "$1"
+  [[ $1 != "$MAIN_NAME" ]] || die "'$1' is the main profile's name."
+}
+
+default_profile() {
+  if [[ -n $DEF ]] && exists "$DEF"; then echo "$DEF"; else echo "$MAIN_NAME"; fi
+}
+
+account_of() {   # logged-in email, or empty
+  local f; f=$(json_for "$1")
+  [[ -f $f ]] || return 0
+  jq -r '.oauthAccount.emailAddress // empty' "$f" 2>/dev/null || true
+}
+
+current() {
+  local cur=${CLAUDE_CONFIG_DIR:-$MAIN_DIR} p
+  cur=${cur%/}
+  for p in $(profiles); do
+    if [[ $(dir_for "$p") == "$cur" ]]; then echo "$p"; return 0; fi
+  done
+  return 0
+}
+
+# Run a command with the profile's config directory.
+with_profile() {
+  local name=$1; shift
+  if [[ $name == "$MAIN_NAME" ]]; then unset CLAUDE_CONFIG_DIR
+  else CLAUDE_CONFIG_DIR=$(dir_for "$name"); export CLAUDE_CONFIG_DIR; fi
+  "$@"
+}
+
+# Link shared items; also picks up items created in ~/.claude later. Never touches real files.
+link_shared() {
+  local dir=$1 item
+  for item in "${SHARED[@]}"; do
+    [[ -L $dir/$item || ! -e $MAIN_DIR/$item ]] && continue
+    if [[ -e $dir/$item ]]; then
+      warn "$dir/$item is a real file, not shared (merge it by hand)"; continue
+    fi
+    ln -s "$MAIN_DIR/$item" "$dir/$item"
+  done
+  return 0
+}
+
+# Merge MCP servers + project settings from the main profile. The profile's own project
+# entries (permissions, trust) are kept; for MCP servers with the same name, main wins.
+sync_one() {
+  need_main_json
+  local j tmp; j=$(json_for "$1")
+  [[ -f $j ]] || echo '{}' > "$j"
+  tmp=$(mktemp "$j.XXXXXX")
+  if jq --slurpfile m "$MAIN_JSON" '
+        $m[0] as $m
+        | .mcpServers      = ((.mcpServers // {}) + ($m.mcpServers // {}))
+        | .githubRepoPaths = ((.githubRepoPaths // {}) + ($m.githubRepoPaths // {}))
+        | .projects        = (($m.projects // {}) * (.projects // {}))' "$j" > "$tmp"; then
+    mv "$tmp" "$j"
+  else
+    rm -f "$tmp"; die "sync failed: $j"
+  fi
+}
+
+make_profile() {
+  need_main_json
+  local dir; dir=$(dir_for "$1")
+  mkdir -p "$dir"
+  if [[ ! -f $dir/.claude.json ]]; then
+    jq '{mcpServers, projects, githubRepoPaths, installMethod, autoUpdates, hasCompletedOnboarding}
+        | with_entries(select(.value != null))' "$MAIN_JSON" > "$dir/.claude.json" \
+      || { rm -rf "$dir"; die "could not read $MAIN_JSON"; }
+  fi
+  link_shared "$dir"
+  touch "$dir/$MARK"
+}
+
+# ── sessions ───────────────────────────────────────────────────────────────────────
+if stat -c %Y / >/dev/null 2>&1; then STAT_MTIME=(stat -c '%Y %n')   # GNU
+else STAT_MTIME=(stat -f '%m %N'); fi                                  # BSD / macOS
+fmt_time() { date -d "@$1" '+%m-%d %H:%M' 2>/dev/null || date -r "$1" '+%m-%d %H:%M'; }
+
+project_dirs() {   # this directory's project folders (logical path + physical path)
+  local p d last=''
+  for p in "$PWD" "$(pwd -P)"; do
+    d="$MAIN_DIR/projects/${p//[^A-Za-z0-9]/-}"
+    if [[ -d $d && $d != "$last" ]]; then echo "$d"; last=$d; fi
+  done
+  return 0
+}
+
+session_files() {
+  local d f
+  while read -r d; do
+    for f in "$d"/*.jsonl; do [[ -e $f ]] && echo "$f"; done
+  done < <(project_dirs)
+  return 0
+}
+
+has_sessions() { [[ -n $(session_files | head -n 1) ]]; }
+
+first_message() {
+  head -n 300 "$1" | jq -r 'select(.type=="user") | .message.content
+      | if type=="string" then . else (map(select(.type=="text").text) | join(" ")) end' 2>/dev/null \
+    | grep -v -e '^[[:space:]]*<' -e '^[[:space:]]*$' | head -n 1 | cut -c1-64 || true
+}
+
+cmd_sessions() {
+  local n=${1:-10} ts f msg
+  [[ $n =~ ^[0-9]+$ ]] || die "expected a number: $n"
+  has_sessions || die "No sessions in this directory: $PWD"
+  printf '%s%-11s  %-36s  %s%s\n' "$D" "MODIFIED" "SESSION" "FIRST MESSAGE" "$R"
+  # Newest first; awk drops the same session seen via both the logical and physical path.
+  session_files | tr '\n' '\0' | xargs -0 "${STAT_MTIME[@]}" | sort -rn \
+    | awk -F/ '!seen[$NF]++' | head -n "$n" \
+    | while read -r ts f; do
+        msg=$(first_message "$f")
+        printf '%s  %s%s%s  %s\n' "$(fmt_time "$ts")" "$C" "$(basename "$f" .jsonl)" "$R" "${msg:-${D}—${R}}"
+      done || true
+  printf '%sresume: %s <profile> -r <session>%s\n' "$D" "$PROG" "$R"
+}
+
+# ── menu: ↑↓ / j k / 1-9 / enter / q — prints the chosen index ─────────────────────────
+menu_pick() {
+  local title=$1; shift
+  local -a items=("$@")
+  local n=$# i=0 idx key k2
+  if [[ ! -t 0 || ! -t 2 ]]; then   # not a terminal: plain select
+    local PS3="› " c
+    echo "$title" >&2
+    select c in "${items[@]}"; do
+      if [[ -n ${c:-} ]]; then echo $((REPLY - 1)); return 0; fi
+    done
+    return 1
+  fi
+  printf '%s%s%s  %s↑↓ move · enter select · q quit%s\n' "$EB" "$title" "$ER" "$ED" "$ER" >&2
+  tput civis >&2 2>/dev/null || true
+  trap 'tput cnorm >&2 2>/dev/null; exit 130' INT TERM
+  while :; do
+    for ((idx = 0; idx < n; idx++)); do
+      if [[ $idx == "$i" ]]; then printf '\e[2K  %s❯%s %s\n' "$EC" "$ER" "${items[idx]}" >&2
+      else printf '\e[2K    %s\n' "${items[idx]}" >&2; fi
+    done
+    IFS= read -rsn1 key </dev/tty || key=q
+    case $key in
+      $'\e') IFS= read -rsn2 -t 1 k2 </dev/tty || k2=''
+             case $k2 in '[A'|OA) i=$(( (i - 1 + n) % n )) ;; '[B'|OB) i=$(( (i + 1) % n )) ;; esac ;;
+      k) i=$(( (i - 1 + n) % n )) ;;
+      j) i=$(( (i + 1) % n )) ;;
+      [1-9]) if (( key <= n )); then i=$((key - 1)); break; fi ;;
+      '') break ;;
+      q|Q) i=-1; break ;;
+    esac
+    printf '\e[%dA' "$n" >&2
+  done
+  tput cnorm >&2 2>/dev/null || true
+  trap - INT TERM
+  [[ $i -ge 0 ]] || return 1
+  echo "$i"
+}
+
+cmd_menu() {
+  local -a names=() rows=() acts=() labels=()
+  local p acc def sel name
+  def=$(default_profile)
+  for p in $(profiles); do
+    acc=$(account_of "$p")
+    names+=("$p")
+    rows+=("$(printf '%-16s %s%s' "$p" "${acc:-${ED}not logged in${ER}}" "$([[ $p == "$def" ]] && echo " ${EY}★${ER}" || true)")")
+  done
+  names+=("+"); rows+=("${EC}+ add a profile${ER}")
+  sel=$(menu_pick "Profile" "${rows[@]}") || exit 0
+  name=${names[sel]}
+
+  if [[ $name == "+" ]]; then
+    printf '%sProfile name:%s ' "$EB" "$ER" >&2
+    read -r name || exit 0
+    cmd_add "$name"; return
+  fi
+
+  if [[ -z $(account_of "$name") ]]; then acts+=(login); labels+=("Log in"); fi
+  acts+=(continue pick new)
+  labels+=("Continue the last conversation here" "Pick a session" "New conversation")
+  if [[ $name != "$def" ]]; then acts+=(default); labels+=("Make default"); fi
+  if [[ -n $(account_of "$name") ]]; then acts+=(login); labels+=("Log in again"); fi
+  sel=$(menu_pick "$name" "${labels[@]}") || exit 0
+  case ${acts[sel]} in
+    login)    cmd_login "$name" ;;
+    default)  cfg_change default "$name" ;;
+    *)        CLAUDE_PROFILE_OPEN=${acts[sel]} cmd_use "$name" ;;
+  esac
+}
+
+# ── commands ───────────────────────────────────────────────────────────────────────
+cmd_list() {
+  local cur def p acc mark star
+  cur=$(current); def=$(default_profile)
+  for p in $(profiles); do
+    acc=$(account_of "$p")
+    if [[ $p == "$cur" ]]; then mark="${G}●$R"; else mark=' '; fi
+    if [[ $p == "$def" ]]; then star="${Y}★$R"; else star=' '; fi
+    printf '%s %s %s%-16s%s %s\n' "$mark" "$star" "$B" "$p" "$R" "${acc:-${D}not logged in${R}}"
+  done
+  printf '%s● this shell  ★ default%s\n' "$D" "$R"
+}
+
+cmd_which() {
+  local c acc; c=$(current)
+  [[ -n $c ]] || { echo "not a profile: ${CLAUDE_CONFIG_DIR:-}"; return 0; }
+  acc=$(account_of "$c")
+  printf '%s%s%s  %s\n' "$B" "$c" "$R" "${acc:-${D}not logged in${R}}"
+}
+
+cmd_add() {
+  local name=${1:-}
+  [[ -n $name ]] || die "usage: $PROG add <name>"
+  valid_name "$name"; need_claude
+  exists "$name" && die "Already exists: $name  (to log in: $PROG login $name)"
+  [[ -e $(dir_for "$name") ]] && die "$(dir_for "$name") exists but isn't a profile. '$PROG doctor' adopts it if it looks like one."
+  make_profile "$name"
+  info "Created $(dir_for "$name") — pick the '$name' account in the browser."
+  with_profile "$name" claude auth login
+  ok "Ready → $PROG $name   (in a new shell: claude-$name)"
+}
+
+# CLAUDE_PROFILE_OPEN overrides the `open` setting (used by the menu and shell-init).
+cmd_use() {
+  need "${1:-}"; local n=$1; shift
+  need_claude
+  if [[ $n != "$MAIN_NAME" ]]; then
+    link_shared "$(dir_for "$n")"
+    if [[ $AUTOSYNC == on ]]; then sync_one "$n"; fi
+  fi
+  if (( $# == 0 )); then
+    case ${CLAUDE_PROFILE_OPEN:-$OPEN} in
+      continue) set -- -c ;;
+      pick)     set -- --resume ;;
+    esac
+  fi
+  # `claude -c` fails when there is nothing to continue → start a new conversation instead.
+  if [[ $# == 1 && ( ${1:-} == -c || ${1:-} == --continue ) ]] && ! has_sessions; then
+    info "No conversation in this directory yet, starting a new one."
+    set --
+  fi
+  with_profile "$n" exec claude "$@"
+}
+
+cmd_login()  { need "${1:-}"; need_claude; with_profile "$1" claude auth login; }
+cmd_logout() { need "${1:-}"; need_claude; with_profile "$1" claude auth logout; }
+
+cmd_status() {
+  local -a list
+  local p tmp out logged method
+  need_claude
+  # shellcheck disable=SC2207  # profile names are validated: no spaces or globs
+  if [[ -n ${1:-} ]]; then need "$1"; list=("$1"); else list=($(profiles)); fi
+  tmp=$(mktemp -d)
+  for p in "${list[@]}"; do   # starting claude is slow → run in parallel
+    ( with_profile "$p" claude auth status > "$tmp/$p" 2>&1 || true ) &
+  done
+  wait
+  for p in "${list[@]}"; do
+    out=$(cat "$tmp/$p")
+    logged=$(jq -r '.loggedIn | tostring' <<<"$out" 2>/dev/null || true)
+    method=$(jq -r '.authMethod // empty' <<<"$out" 2>/dev/null || true)
+    case $logged in
+      true)  printf '%s✓%s %s%-16s%s %s %s(%s)%s\n' "$G" "$R" "$B" "$p" "$R" "$(account_of "$p")" "$D" "$method" "$R" ;;
+      false) printf '%s✗%s %s%-16s%s %snot logged in → %s login %s%s\n' "$Y" "$R" "$B" "$p" "$R" "$D" "$PROG" "$p" "$R" ;;
+      *)     printf '? %s%s%s\n%s\n' "$B" "$p" "$R" "$out" ;;
+    esac
+  done
+  rm -rf "$tmp"
+}
+
+cmd_rename() {
+  local old=${1:-} new=${2:-} j
+  [[ -n $old && -n $new ]] || die "usage: $PROG rename <old> <new>"
+  need "$old"
+  if [[ $old == "$MAIN_NAME" ]]; then cfg_change main "$new"; return; fi
+  valid_name "$new"; need_claude
+  [[ -e $(dir_for "$new") ]] && die "Already exists: $(dir_for "$new")"
+  # On macOS the login lives in the Keychain, keyed by the config directory, so it can't
+  # be moved: log out of the old one and log in to the new one.
+  ( with_profile "$old" claude auth logout >/dev/null 2>&1 ) || true
+  mv "$(dir_for "$old")" "$(dir_for "$new")"
+  j=$(json_for "$new")
+  if [[ -f $j ]]; then jq 'del(.oauthAccount)' "$j" > "$j.tmp" && mv "$j.tmp" "$j"; fi
+  if [[ $DEF == "$old" ]]; then DEF=$new; save_cfg; fi
+  ok "$old → $new. Log in again:"
+  with_profile "$new" claude auth login
+}
+
+cmd_rm() {
+  local name=${1:-} ans acc
+  [[ -n $name ]] || die "usage: $PROG rm <name>"
+  [[ $name != "$MAIN_NAME" ]] || die "The main profile ($MAIN_NAME) can't be removed."
+  need "$name"; need_claude
+  acc=$(account_of "$name")
+  printf "%sRemove '%s'%s (%s)? Shared history is kept. [y/N] " "$EB" "$name" "$ER" "${acc:-not logged in}" >&2
+  read -r ans || ans=''
+  [[ $ans == [yY] ]] || die "Cancelled."
+  ( with_profile "$name" claude auth logout >/dev/null 2>&1 ) || true
+  rm -rf "$(dir_for "$name")"   # marked profile dir: symlinks + profile-only files
+  if [[ $DEF == "$name" ]]; then DEF=''; save_cfg; fi
+  ok "Removed: $name"
+}
+
+cmd_sync() {
+  local p
+  for p in ${1:-$(profiles)}; do
+    need "$p"
+    [[ $p == "$MAIN_NAME" ]] && continue
+    sync_one "$p"; ok "synced: $p"
+  done
+  warn "Restart any open sessions of these profiles; a running session may write its old .claude.json back."
+}
+
+cmd_doctor() {
+  local p dir item d rc issues=0 fixed=0 acc hooked=''
+  printf '%sEnvironment%s\n' "$B" "$R"
+  if command -v claude >/dev/null; then ok "claude: $(command -v claude)"; else warn "claude is not on PATH"; issues=$((issues+1)); fi
+  if [[ -f $MAIN_JSON ]]; then ok "$MAIN_JSON found"; else warn "$MAIN_JSON missing — run plain 'claude' and log in"; issues=$((issues+1)); fi
+  for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
+    if grep -qs "$PROG shell-init" "$rc"; then hooked=$rc; fi
+  done
+  if [[ -n $hooked ]]; then ok "shell-init found in $hooked"
+  else warn "add to your shell rc: eval \"\$($PROG shell-init)\""; issues=$((issues+1)); fi
+
+  printf '%sSettings%s\n' "$B" "$R"
+  if [[ -n $DEF ]] && ! exists "$DEF"; then warn "default='$DEF' doesn't exist → using main"; issues=$((issues+1)); fi
+  [[ $OPEN =~ ^(new|continue|pick)$ ]] || { warn "open='$OPEN' is invalid → new"; issues=$((issues+1)); }
+  [[ $AUTOSYNC =~ ^(on|off)$ ]] || { warn "auto-sync='$AUTOSYNC' is invalid → off"; issues=$((issues+1)); }
+  ok "main=$MAIN_NAME default=$(default_profile) open=$OPEN auto-sync=$AUTOSYNC${SHARE:+ share=\"$SHARE\"}"
+
+  # Adopt unmarked directories that look like profiles (.claude.json + shared projects link).
+  for d in "$HOME"/.claude-*; do
+    [[ -d $d && ! -f $d/$MARK ]] || continue
+    if [[ -f $d/.claude.json && -L $d/projects ]]; then
+      touch "$d/$MARK"; ok "adopted existing profile: $d"; fixed=$((fixed+1))
+    else
+      warn "not a profile (no marker): $d"
+    fi
+  done
+
+  printf '%sProfiles%s\n' "$B" "$R"
+  for p in $(profiles); do
+    acc=$(account_of "$p")
+    printf '  %s%-16s%s %s\n' "$B" "$p" "$R" "${acc:-${Y}not logged in${R}}"
+    [[ $p == "$MAIN_NAME" ]] && continue
+    dir=$(dir_for "$p")
+    for item in "${SHARED[@]}"; do
+      if [[ -L $dir/$item ]]; then
+        [[ -e $dir/$item ]] || { warn "  $p: broken link: $item"; issues=$((issues+1)); }
+      elif [[ -e $dir/$item ]]; then
+        warn "  $p: diverged (real file, not shared): $item"; issues=$((issues+1))
+      elif [[ -e $MAIN_DIR/$item ]]; then
+        ln -s "$MAIN_DIR/$item" "$dir/$item"; ok "  $p: linked $item"; fixed=$((fixed+1))
+      fi
+    done
+  done
+  echo
+  if (( issues == 0 )); then ok "All good$( (( fixed )) && echo " ($fixed fixed)" || true )."
+  else warn "$issues issue(s)$( (( fixed )) && echo ", $fixed fixed" || true )."; fi
+}
+
+cfg_val() {
+  case $1 in
+    main)      echo "$MAIN_NAME" ;;
+    default)   default_profile ;;
+    open)      echo "$OPEN" ;;
+    auto-sync) echo "$AUTOSYNC" ;;
+    share)     echo "$SHARE" ;;
+    *)         die "Unknown setting: $1  (${KEYS[*]})" ;;
+  esac
+}
+
+cfg_change() {
+  local key=$1 val=$2 item
+  case $key in
+    main)
+      [[ $val == "$MAIN_NAME" ]] && { ok "main = $val"; return 0; }
+      check_name "$val"
+      [[ -e $HOME/.claude-$val ]] && die "$HOME/.claude-$val already exists; the main profile can't take that name."
+      [[ $DEF == "$MAIN_NAME" ]] && DEF=$val
+      MAIN_NAME=$val ;;
+    default)   need "$val"; if [[ $val == "$MAIN_NAME" ]]; then DEF=''; else DEF=$val; fi ;;
+    open)      [[ $val =~ ^(new|continue|pick)$ ]] || die "open: new | continue | pick"; OPEN=$val ;;
+    auto-sync) [[ $val =~ ^(on|off)$ ]] || die "auto-sync: on | off"; AUTOSYNC=$val ;;
+    share)
+      for item in $val; do valid_share_item "$item" || die "share: invalid item '$item'"; done
+      SHARE=$val ;;
+    *)         die "Unknown setting: $key  (${KEYS[*]})" ;;
+  esac
+  save_cfg
+  ok "$key = $val"
+  case $key in
+    main|default) info "Takes effect in new shells (or: exec \$SHELL)." ;;
+    share)        info "Existing profiles pick it up on next start (or: $PROG doctor)." ;;
+  esac
+}
+
+cmd_config() {
+  case $# in
+    0) printf '%smain%s       %s  %sprofile name of ~/.claude%s\n'        "$B" "$R" "$MAIN_NAME"         "$D" "$R"
+       printf '%sdefault%s    %s  %splain claude / %s -c%s\n'             "$B" "$R" "$(default_profile)" "$D" "$PROG" "$R"
+       printf '%sopen%s       %s  %snew | continue | pick%s\n'            "$B" "$R" "$OPEN"              "$D" "$R"
+       printf '%sauto-sync%s  %s  %son | off%s\n'                         "$B" "$R" "$AUTOSYNC"          "$D" "$R"
+       printf '%sshare%s      %s  %sextra shared items%s\n'               "$B" "$R" "${SHARE:--}"        "$D" "$R"
+       printf '%schange: %s config <key> <value>  ·  file: %s%s\n' "$D" "$PROG" "$CONF" "$R" ;;
+    1) cfg_val "$1" ;;
+    *) cfg_change "$1" "$2" ;;
+  esac
+}
+
+cmd_default() { if (( $# )); then cfg_change default "$1"; else default_profile; fi; }
+
+# Output is sourced by zsh or bash. Inside a Claude Code session (CLAUDECODE is set, and the
+# rc file ends up in its shell snapshot) nothing changes, so the session keeps its own account.
+cmd_shell_init() {
+  local self p def
+  [[ $0 == */* ]] || die "run shell-init from PATH or with a full path"
+  self="$(cd "${0%/*}" && pwd)/${0##*/}"
+  for p in $(profiles); do echo "alias claude-$p='$self use $p'"; done
+  def=$(default_profile)
+  echo "unset -f claude 2>/dev/null || true"
+  if [[ $def != "$MAIN_NAME" ]]; then
+    echo "if [ -z \"\${CLAUDECODE:-}\" ]; then export CLAUDE_CONFIG_DIR='$(dir_for "$def")'; fi"
+    # Plain `claude` in a terminal goes through this script (links + auto-sync) with open=new.
+    echo "claude() { if [ -n \"\${CLAUDECODE:-}\" ]; then command claude \"\$@\"; else CLAUDE_PROFILE_OPEN=new command '$self' use '$def' \"\$@\"; fi; }"
+  else
+    echo "if [ -z \"\${CLAUDECODE:-}\" ]; then case \${CLAUDE_CONFIG_DIR:-} in '$HOME'/.claude-*) unset CLAUDE_CONFIG_DIR ;; esac; fi"
+  fi
+}
+
+cmd_help() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
+
+case ${1:-} in
+  "")             cmd_menu ;;
+  -h|--help|help) cmd_help ;;
+  version)        echo "$PROG $VERSION" ;;
+  -*)             cmd_use "$(default_profile)" "$@" ;;
+  list|ls)        cmd_list ;;
+  which|current)  cmd_which ;;
+  add|new)        shift; cmd_add "$@" ;;
+  use)            shift; cmd_use "$@" ;;
+  default)        shift; cmd_default "$@" ;;
+  config)         shift; cmd_config "$@" ;;
+  login)          shift; cmd_login "$@" ;;
+  logout)         shift; cmd_logout "$@" ;;
+  status)         shift; cmd_status "$@" ;;
+  rename|mv)      shift; cmd_rename "$@" ;;
+  rm|remove)      shift; cmd_rm "$@" ;;
+  sync)           shift; cmd_sync "$@" ;;
+  doctor)         cmd_doctor ;;
+  sessions|s)     shift; cmd_sessions "$@" ;;
+  shell-init)     cmd_shell_init ;;
+  *)              exists "$1" || die "Unknown command or profile: $1  ($PROG help)"; cmd_use "$@" ;;
+esac

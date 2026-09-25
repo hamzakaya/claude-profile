@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck --version && make lint
+      - name: Plugin version matches script
+        run: make version-check
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bash: bash          # bash 5
+          - os: macos-latest
+            bash: /bin/bash     # bash 3.2, what macOS users actually have
+          - os: macos-latest
+            bash: bash          # Homebrew bash 5
+    name: test (${{ matrix.os }}, ${{ matrix.bash }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          ln -sf "$(command -v ${{ matrix.bash }})" "$RUNNER_TEMP/bin/bash"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Versions
+        run: bash --version | head -n 1 && jq --version
+      - name: Test
+        run: make test

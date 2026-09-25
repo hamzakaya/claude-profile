@@ -1,0 +1,13 @@
+{
+  "name": "claude-profile",
+  "version": "1.0.0",
+  "description": "Install and manage claude-profile: run Claude Code with several accounts side by side, sharing one conversation history.",
+  "author": {
+    "name": "Hamza KAYA",
+    "url": "https://github.com/hamzakaya"
+  },
+  "homepage": "https://github.com/hamzakaya/claude-profile",
+  "repository": "https://github.com/hamzakaya/claude-profile",
+  "license": "MIT",
+  "keywords": ["accounts", "profiles", "multi-account", "config", "shell"]
+}
