@@ -12,10 +12,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - `shell-init` no longer breaks when you have your own `claude` alias (zsh: "defining function based on alias"; bash: syntax error). The alias's flags now reach the default profile.
 - The `open` override used by the menu and `shell-init` no longer leaks into the Claude Code session's environment.
 - `doctor` finds the shell integration in `$ZDOTDIR/.zshrc`.
+- `install.sh` and `make install` back up an existing `claude-profile` that isn't this tool (to `claude-profile.bak`) instead of overwriting it.
 
 ### Changed
 
-- `rules` (`~/.claude/rules`, user-level instructions) is now shared by default.
+- `rules` (`~/.claude/rules`, user-level instructions) and `paste-cache` (long pastes that the shared `history.jsonl` points to) are now shared by default.
 
 ## [1.0.0] - 2026-09-26
 

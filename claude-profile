@@ -42,7 +42,7 @@ MAIN_JSON="$HOME/.claude.json"
 CONF="${XDG_CONFIG_HOME:-$HOME/.config}/$PROG/config"
 MARK=.claude-profile   # only ~/.claude-* directories containing this file count as profiles
 SHARED=(projects settings.json agents commands skills hooks rules plugins plans output-styles
-        file-history history.jsonl tasks todos keybindings.json CLAUDE.md)
+        file-history history.jsonl paste-cache tasks todos keybindings.json CLAUDE.md)
 KEYS=(main default open auto-sync share)
 RESERVED=" list ls which current add new use default config sessions s status login logout rename mv rm remove sync doctor shell-init help profile version "
 

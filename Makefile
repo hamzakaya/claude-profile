@@ -18,6 +18,9 @@ test: ## Run the test suite (in a throwaway HOME)
 
 install: ## Install to ~/.local/bin (or PREFIX=/usr/local)
 	install -d "$(BINDIR)"
+	@t="$(BINDIR)/claude-profile"; \
+	  if [ -e "$$t" ] && ! grep -q '^PROG=claude-profile$$' "$$t"; then \
+	    cp -p "$$t" "$$t.bak" && echo "Backed up the existing $$t (not claude-profile) to $$t.bak"; fi
 	install -m 0755 claude-profile "$(BINDIR)/claude-profile"
 	@echo "Installed $(BINDIR)/claude-profile"
 	@echo 'Next: add  eval "$$(claude-profile shell-init)"  to ~/.zshrc or ~/.bashrc'

@@ -41,7 +41,13 @@ fi
 bash -n "$tmp/claude-profile" || die "downloaded file is not a valid script"
 
 mkdir -p "$BINDIR"
-install -m 0755 "$tmp/claude-profile" "$BINDIR/claude-profile"
+# Something else under the same name (e.g. a hand-written script): keep a copy, don't lose it.
+target=$BINDIR/claude-profile
+if [[ -e $target ]] && ! grep -q '^PROG=claude-profile$' "$target" 2>/dev/null; then
+  cp -p "$target" "$target.bak" || die "could not back up $target"
+  say "Backed up the existing $target (not claude-profile) to $target.bak"
+fi
+install -m 0755 "$tmp/claude-profile" "$target"
 say "Installed $("$BINDIR/claude-profile" version) → $BINDIR/claude-profile"
 
 case ":$PATH:" in

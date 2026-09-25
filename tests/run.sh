@@ -186,10 +186,36 @@ test_share_links_extra_items() {
   assert_link "$HOME/.claude-work/statusline.sh"
 }
 
-test_rules_shared_by_default() {
-  mkdir "$HOME/.claude/rules"
+test_rules_and_paste_cache_shared_by_default() {
+  mkdir "$HOME/.claude/rules" "$HOME/.claude/paste-cache"
   "$CP" add work >/dev/null
   assert_link "$HOME/.claude-work/rules"
+  assert_link "$HOME/.claude-work/paste-cache"
+}
+
+test_install_sh_backs_up_foreign_script() {
+  # Fake curl serves the working copy, so the installer runs offline.
+  # shellcheck disable=SC2016  # $# and $1 belong to the fake curl, not to this shell
+  printf '%s\n' '#!/usr/bin/env bash' 'while [[ $# -gt 1 ]]; do [[ $1 == -o ]] && out=$2; shift; done' \
+    "cp '$CP' \"\$out\"" > "$T/bin/curl"
+  chmod +x "$T/bin/curl"
+  mkdir -p "$T/p/bin"; echo '# my own script' > "$T/p/bin/claude-profile"
+  OUT=$(PREFIX=$T/p CLAUDE_PROFILE_VERSION=main bash "$ROOT/install.sh" 2>&1); RC=$?
+  assert_ok; assert_out "Backed up"
+  assert_eq "$(cat "$T/p/bin/claude-profile.bak")" "# my own script"
+  grep -q '^PROG=claude-profile$' "$T/p/bin/claude-profile" || fail "not installed"
+  # Upgrading an existing claude-profile makes no backup.
+  rm "$T/p/bin/claude-profile.bak"
+  OUT=$(PREFIX=$T/p CLAUDE_PROFILE_VERSION=main bash "$ROOT/install.sh" 2>&1); RC=$?
+  assert_ok; assert_not_out "Backed up"; assert_no_file "$T/p/bin/claude-profile.bak"
+}
+
+test_make_install_backs_up_foreign_script() {
+  command -v make >/dev/null || return 0
+  mkdir -p "$T/m"; echo '# my own script' > "$T/m/claude-profile"
+  OUT=$(make -s -C "$ROOT" install BINDIR="$T/m" 2>&1); RC=$?
+  assert_ok; assert_out "Backed up"
+  assert_eq "$(cat "$T/m/claude-profile.bak")" "# my own script"
 }
 
 test_default_profile() {

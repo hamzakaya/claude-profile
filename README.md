@@ -232,7 +232,7 @@ share      -  extra shared items
 
 Starting a profile sets `CLAUDE_CONFIG_DIR=~/.claude-<name>` and `exec`s `claude`. It also re-links any shared item that has appeared in `~/.claude` since last time.
 
-**Shared** (symlinked): `projects`, `settings.json`, `agents`, `commands`, `skills`, `hooks`, `rules`, `plugins`, `plans`, `output-styles`, `file-history`, `history.jsonl`, `tasks`, `todos`, `keybindings.json`, `CLAUDE.md`, plus anything in `share`.
+**Shared** (symlinked): `projects`, `settings.json`, `agents`, `commands`, `skills`, `hooks`, `rules`, `plugins`, `plans`, `output-styles`, `file-history`, `history.jsonl`, `paste-cache`, `tasks`, `todos`, `keybindings.json`, `CLAUDE.md`, plus anything in `share`.
 
 **Per profile**:
 - the login: the macOS Keychain entry, or `.credentials.json` on Linux;
