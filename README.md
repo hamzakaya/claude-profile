@@ -6,7 +6,7 @@
 
 **Run [Claude Code](https://docs.claude.com/en/docs/claude-code) with several accounts side by side, sharing one conversation history.**
 
-Each profile has its own login. Everything else (conversation history, settings, plugins, skills, hooks, agents, `CLAUDE.md`) is shared with `~/.claude`. So you can start a conversation with your work account and pick it up later with your personal one via `--resume`.
+Each profile has its own login. Everything else (conversation history, settings, plugins, skills, hooks, agents, rules, `CLAUDE.md`) is shared with `~/.claude`. So you can start a conversation with your work account and pick it up later with your personal one via `--resume`.
 
 ```console
 $ claude-profile list
@@ -201,7 +201,7 @@ Stored in `~/.config/claude-profile/config` (or `$XDG_CONFIG_HOME/claude-profile
 | `default` | profile name | *main* | Profile used by plain `claude` and `claude-profile -c` |
 | `open` | `new` · `continue` · `pick` | `new` | What `claude-profile <name>` does with no extra arguments |
 | `auto-sync` | `on` · `off` | `off` | Run `sync` every time a profile starts |
-| `share` | space-separated names | *(none)* | Extra items in `~/.claude` to share, e.g. `"rules statusline.sh"` |
+| `share` | space-separated names | *(none)* | Extra items in `~/.claude` to share, e.g. `"statusline.sh scripts"` |
 
 ```console
 $ claude-profile config
@@ -232,7 +232,7 @@ share      -  extra shared items
 
 Starting a profile sets `CLAUDE_CONFIG_DIR=~/.claude-<name>` and `exec`s `claude`. It also re-links any shared item that has appeared in `~/.claude` since last time.
 
-**Shared** (symlinked): `projects`, `settings.json`, `agents`, `commands`, `skills`, `hooks`, `plugins`, `plans`, `output-styles`, `file-history`, `history.jsonl`, `tasks`, `todos`, `keybindings.json`, `CLAUDE.md`, plus anything in `share`.
+**Shared** (symlinked): `projects`, `settings.json`, `agents`, `commands`, `skills`, `hooks`, `rules`, `plugins`, `plans`, `output-styles`, `file-history`, `history.jsonl`, `tasks`, `todos`, `keybindings.json`, `CLAUDE.md`, plus anything in `share`.
 
 **Per profile**:
 - the login: the macOS Keychain entry, or `.credentials.json` on Linux;
@@ -242,7 +242,9 @@ When you create a profile, it starts with a copy of the main profile's MCP serve
 
 Existing files are never overwritten. If a profile has a real file where a link should be, `doctor` reports it as *diverged* so you can merge it by hand.
 
-**Inside Claude Code.** `shell-init` does nothing when `CLAUDECODE` is set. So shells that Claude Code spawns keep the account of the session that started them.
+**Inside Claude Code.** Claude Code sets `CLAUDECODE` in the shells it spawns. There, the `claude` function from `shell-init` runs the real `claude` directly, and `CLAUDE_CONFIG_DIR` is left alone. So a nested `claude -p …` keeps the account of the session that started it.
+
+**Your own `claude` alias** (e.g. `alias claude='claude --model opus'`) keeps working. With a default profile set, the alias's flags are passed through to that profile.
 
 ## Troubleshooting
 
@@ -273,9 +275,9 @@ This is expected. On macOS the login is stored in the Keychain, keyed by the con
 </details>
 
 <details>
-<summary><code>-c</code> started a new conversation</summary>
+<summary><code>No conversation in this directory yet, starting a new one</code></summary>
 
-There was no conversation to continue in this directory, so `claude -c` would have failed. `claude-profile` starts a fresh one instead. Use `claude-profile sessions` to see what's there.
+With `open continue`, `claude-profile <name>` (no arguments) continues the last conversation in this directory. When there is none, it starts a fresh one instead of letting `claude -c` fail. A `-c` you type yourself is always passed to `claude` unchanged. Use `claude-profile sessions` to see what's there.
 </details>
 
 <details>

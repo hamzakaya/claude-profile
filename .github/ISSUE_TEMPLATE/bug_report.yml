@@ -21,6 +21,7 @@ body:
     id: doctor
     attributes:
       label: Output of `claude-profile doctor`
+      description: It lists the email of each logged-in profile. Replace them (e.g. with `me@work`) if you'd rather not share them.
       render: text
     validations:
       required: true

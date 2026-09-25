@@ -5,6 +5,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- Sessions weren't found in directories with non-ASCII characters (`ü`, `ş`, `İ`, …) in their path: the project folder name depended on the locale. It is now computed the way Claude Code does, whatever the locale.
+- A `-c` you type (`claude-profile work -c`, or plain `claude -c` with a default profile) is passed to `claude` unchanged. Only `open continue` still falls back to a new conversation when there is nothing to continue.
+- `shell-init` no longer breaks when you have your own `claude` alias (zsh: "defining function based on alias"; bash: syntax error). The alias's flags now reach the default profile.
+- The `open` override used by the menu and `shell-init` no longer leaks into the Claude Code session's environment.
+- `doctor` finds the shell integration in `$ZDOTDIR/.zshrc`.
+
+### Changed
+
+- `rules` (`~/.claude/rules`, user-level instructions) is now shared by default.
+
 ## [1.0.0] - 2026-09-26
 
 ### Added

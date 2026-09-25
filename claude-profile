@@ -41,7 +41,7 @@ MAIN_DIR="$HOME/.claude"
 MAIN_JSON="$HOME/.claude.json"
 CONF="${XDG_CONFIG_HOME:-$HOME/.config}/$PROG/config"
 MARK=.claude-profile   # only ~/.claude-* directories containing this file count as profiles
-SHARED=(projects settings.json agents commands skills hooks plugins plans output-styles
+SHARED=(projects settings.json agents commands skills hooks rules plugins plans output-styles
         file-history history.jsonl tasks todos keybindings.json CLAUDE.md)
 KEYS=(main default open auto-sync share)
 RESERVED=" list ls which current add new use default config sessions s status login logout rename mv rm remove sync doctor shell-init help profile version "
@@ -195,10 +195,18 @@ if stat -c %Y / >/dev/null 2>&1; then STAT_MTIME=(stat -c '%Y %n')   # GNU
 else STAT_MTIME=(stat -f '%m %N'); fi                                  # BSD / macOS
 fmt_time() { date -d "@$1" '+%m-%d %H:%M' 2>/dev/null || date -r "$1" '+%m-%d %H:%M'; }
 
+# Claude Code names a project folder after its path with every character other than ASCII
+# letters and digits replaced by "-". jq does this per character whatever the locale; the bash
+# fallback spells out the ASCII set because [A-Za-z] also matches ü, ş, … in UTF-8 locales.
+project_key() {
+  local ascii=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
+  jq -rn --arg p "$1" '$p | gsub("[^a-zA-Z0-9]"; "-")' 2>/dev/null || echo "${1//[!$ascii]/-}"
+}
+
 project_dirs() {   # this directory's project folders (logical path + physical path)
   local p d last=''
   for p in "$PWD" "$(pwd -P)"; do
-    d="$MAIN_DIR/projects/${p//[^A-Za-z0-9]/-}"
+    d="$MAIN_DIR/projects/$(project_key "$p")"
     if [[ -d $d && $d != "$last" ]]; then echo "$d"; last=$d; fi
   done
   return 0
@@ -347,17 +355,17 @@ cmd_use() {
     link_shared "$(dir_for "$n")"
     if [[ $AUTOSYNC == on ]]; then sync_one "$n"; fi
   fi
+  # Only the implicit `open=continue` falls back to a new conversation when there is nothing to
+  # continue. An explicit -c from the user is passed to claude untouched.
   if (( $# == 0 )); then
     case ${CLAUDE_PROFILE_OPEN:-$OPEN} in
-      continue) set -- -c ;;
-      pick)     set -- --resume ;;
+      continue)
+        if has_sessions; then set -- -c
+        else info "No conversation in this directory yet, starting a new one."; fi ;;
+      pick) set -- --resume ;;
     esac
   fi
-  # `claude -c` fails when there is nothing to continue → start a new conversation instead.
-  if [[ $# == 1 && ( ${1:-} == -c || ${1:-} == --continue ) ]] && ! has_sessions; then
-    info "No conversation in this directory yet, starting a new one."
-    set --
-  fi
+  unset CLAUDE_PROFILE_OPEN   # don't leak into the claude session's environment
   with_profile "$n" exec claude "$@"
 }
 
@@ -436,7 +444,7 @@ cmd_doctor() {
   printf '%sEnvironment%s\n' "$B" "$R"
   if command -v claude >/dev/null; then ok "claude: $(command -v claude)"; else warn "claude is not on PATH"; issues=$((issues+1)); fi
   if [[ -f $MAIN_JSON ]]; then ok "$MAIN_JSON found"; else warn "$MAIN_JSON missing — run plain 'claude' and log in"; issues=$((issues+1)); fi
-  for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
+  for rc in "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
     if grep -qs "$PROG shell-init" "$rc"; then hooked=$rc; fi
   done
   if [[ -n $hooked ]]; then ok "shell-init found in $hooked"
@@ -532,8 +540,10 @@ cmd_config() {
 
 cmd_default() { if (( $# )); then cfg_change default "$1"; else default_profile; fi; }
 
-# Output is sourced by zsh or bash. Inside a Claude Code session (CLAUDECODE is set, and the
-# rc file ends up in its shell snapshot) nothing changes, so the session keeps its own account.
+# Output is sourced by zsh or bash. Inside a Claude Code session (CLAUDECODE is set) the env
+# lines do nothing and the `claude` function calls the real claude, so the session keeps its
+# own account. `function claude {` rather than `claude() {`: with a user alias named claude,
+# zsh and bash expand it in the `name()` form and fail to parse.
 cmd_shell_init() {
   local self p def
   [[ $0 == */* ]] || die "run shell-init from PATH or with a full path"
@@ -544,7 +554,7 @@ cmd_shell_init() {
   if [[ $def != "$MAIN_NAME" ]]; then
     echo "if [ -z \"\${CLAUDECODE:-}\" ]; then export CLAUDE_CONFIG_DIR='$(dir_for "$def")'; fi"
     # Plain `claude` in a terminal goes through this script (links + auto-sync) with open=new.
-    echo "claude() { if [ -n \"\${CLAUDECODE:-}\" ]; then command claude \"\$@\"; else CLAUDE_PROFILE_OPEN=new command '$self' use '$def' \"\$@\"; fi; }"
+    echo "function claude { if [ -n \"\${CLAUDECODE:-}\" ]; then command claude \"\$@\"; else CLAUDE_PROFILE_OPEN=new command '$self' use '$def' \"\$@\"; fi; }"
   else
     echo "if [ -z \"\${CLAUDECODE:-}\" ]; then case \${CLAUDE_CONFIG_DIR:-} in '$HOME'/.claude-*) unset CLAUDE_CONFIG_DIR ;; esac; fi"
   fi

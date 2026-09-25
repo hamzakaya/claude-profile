@@ -7,7 +7,7 @@ compatibility: Claude Code on macOS, Linux or WSL with bash 3.2+ and jq.
 
 # claude-profile
 
-`claude-profile` gives each Claude Code account its own config directory (`~/.claude-<name>`, used through `CLAUDE_CONFIG_DIR`). Conversation history, settings, plugins, skills, hooks, agents and `CLAUDE.md` are symlinked back to `~/.claude`, so `--resume` works across accounts. The original `~/.claude` is the *main* profile and is never modified.
+`claude-profile` gives each Claude Code account its own config directory (`~/.claude-<name>`, used through `CLAUDE_CONFIG_DIR`). Conversation history, settings, plugins, skills, hooks, agents, rules and `CLAUDE.md` are symlinked back to `~/.claude`, so `--resume` works across accounts. The original `~/.claude` is the *main* profile and is never modified.
 
 Full docs: https://github.com/hamzakaya/claude-profile
 

@@ -23,7 +23,8 @@ setup() {
           mcpServers: {m1: {command: "x"}}, projects: {"/p": {allowedTools: ["a"]}},
           hasCompletedOnboarding: true}' > "$HOME/.claude.json"
   # Fake claude: `auth login|logout|status` edit the profile's .claude.json; anything
-  # else records its arguments and config dir to $STUB_OUT.
+  # else records its arguments and config dir to $STUB_OUT, and CLAUDE_PROFILE_OPEN (which
+  # must not leak into the session) to $STUB_OUT.env.
   cat > "$T/bin/claude" <<'STUB'
 #!/usr/bin/env bash
 j=${CLAUDE_CONFIG_DIR:+$CLAUDE_CONFIG_DIR/.claude.json}; j=${j:-$HOME/.claude.json}
@@ -32,7 +33,8 @@ case "$1 ${2:-}" in
   "auth login")  jq --arg e "$name@example.com" '.oauthAccount.emailAddress = $e' "$j" > "$j.t" && mv "$j.t" "$j" ;;
   "auth logout") jq 'del(.oauthAccount)' "$j" > "$j.t" && mv "$j.t" "$j" ;;
   "auth status") jq -c '{loggedIn: (.oauthAccount != null), authMethod: "oauth"}' "$j" ;;
-  *) printf '%s|%s\n' "${CLAUDE_CONFIG_DIR:-}" "$*" > "$STUB_OUT" ;;
+  *) printf '%s|%s\n' "${CLAUDE_CONFIG_DIR:-}" "$*" > "$STUB_OUT"
+     printf '%s\n' "${CLAUDE_PROFILE_OPEN-<unset>}" > "$STUB_OUT.env" ;;
 esac
 STUB
   chmod +x "$T/bin/claude"
@@ -111,10 +113,39 @@ test_use_execs_claude_with_config_dir() {
   assert_eq "$(cat "$STUB_OUT")" "|--foo"
 }
 
-test_use_continue_without_sessions_starts_new() {
+test_open_continue_without_sessions_starts_new() {
   "$CP" add work >/dev/null
-  run work -c; assert_ok; assert_out "starting a new one"
+  "$CP" config open continue >/dev/null
+  run work; assert_ok; assert_out "starting a new one"
   assert_eq "$(cat "$STUB_OUT")" "$HOME/.claude-work|"
+}
+
+test_explicit_continue_is_passed_through() {
+  # Even with no sessions found, a -c the user typed goes to claude untouched.
+  "$CP" add work >/dev/null
+  run work -c; assert_ok; assert_not_out "starting a new one"
+  assert_eq "$(cat "$STUB_OUT")" "$HOME/.claude-work|-c"
+}
+
+test_open_setting_does_not_leak_into_session() {
+  "$CP" add work >/dev/null
+  CLAUDE_PROFILE_OPEN=new run work
+  assert_eq "$(cat "$STUB_OUT.env")" "<unset>"
+}
+
+test_sessions_found_for_non_ascii_path() {
+  # Claude Code replaces every non-ASCII-alphanumeric character (not byte) with "-".
+  mkdir -p "$T/müşteri İş" && cd "$T/müşteri İş"
+  d="$HOME/.claude/projects/${T//[^A-Za-z0-9]/-}-m--teri---"; mkdir -p "$d"
+  echo '{"type":"user","message":{"content":"merhaba"}}' > "$d/s1.jsonl"
+  # en_US.UTF-8: [A-Za-z] matches ü, ş…; C: bash works on bytes. Both used to miss the folder.
+  # (Where en_US.UTF-8 isn't installed bash falls back to C and warns; the warning is dropped.)
+  for loc in en_US.UTF-8 C; do
+    { LC_ALL=$loc run sessions; } 2>/dev/null; assert_ok; assert_out "merhaba"
+  done
+  "$CP" add work >/dev/null
+  "$CP" config open continue >/dev/null
+  { LC_ALL=en_US.UTF-8 run work; } 2>/dev/null; assert_eq "$(cat "$STUB_OUT")" "$HOME/.claude-work|-c"
 }
 
 test_use_continue_with_sessions() {
@@ -149,8 +180,14 @@ test_config_roundtrip() {
 }
 
 test_share_links_extra_items() {
+  echo 'echo hi' > "$HOME/.claude/statusline.sh"
+  "$CP" config share statusline.sh >/dev/null
+  "$CP" add work >/dev/null
+  assert_link "$HOME/.claude-work/statusline.sh"
+}
+
+test_rules_shared_by_default() {
   mkdir "$HOME/.claude/rules"
-  "$CP" config share rules >/dev/null
   "$CP" add work >/dev/null
   assert_link "$HOME/.claude-work/rules"
 }
@@ -233,10 +270,42 @@ test_shell_init() {
   assert_out "alias claude-main="
   assert_not_out "claude() {"
   "$CP" default work >/dev/null
-  run shell-init; assert_out "export CLAUDE_CONFIG_DIR='$HOME/.claude-work'"; assert_out "claude() {"
+  run shell-init; assert_out "export CLAUDE_CONFIG_DIR='$HOME/.claude-work'"; assert_out "function claude {"
   # The generated code must be valid for both shells it targets.
   bash -n <<<"$OUT"
   if command -v zsh >/dev/null; then zsh -n <<<"$OUT"; fi
+}
+
+test_shell_init_with_user_claude_alias() {
+  # A user alias named claude must not break the generated function (it did with `claude() {`).
+  "$CP" add work >/dev/null
+  "$CP" default work >/dev/null
+  "$CP" shell-init > "$T/init.sh"
+  # A script file, one command per line: an alias only applies to lines read after it is
+  # defined, and `zsh -c` parses its whole string up front. $PATH starts with the fake claude.
+  printf '%s\n' "alias claude='claude --flag'" ". '$T/init.sh'" 'claude x' > "$T/user.sh"
+  bash -O expand_aliases "$T/user.sh" >/dev/null 2>"$T/err"
+  assert_eq "$(cat "$T/err")" ""
+  assert_eq "$(cat "$STUB_OUT")" "$HOME/.claude-work|--flag x"
+  if command -v zsh >/dev/null; then
+    rm -f "$STUB_OUT"
+    zsh -f "$T/user.sh" >/dev/null 2>"$T/err"
+    assert_eq "$(cat "$T/err")" ""
+    assert_eq "$(cat "$STUB_OUT")" "$HOME/.claude-work|--flag x"
+  fi
+}
+
+test_shell_init_function_inside_claude_code() {
+  # Inside a Claude Code session the function must run the real claude with the session's
+  # own config dir, not switch to the default profile.
+  "$CP" add work >/dev/null
+  "$CP" add other >/dev/null
+  "$CP" default work >/dev/null
+  init=$("$CP" shell-init)
+  CLAUDECODE=1 CLAUDE_CONFIG_DIR=$HOME/.claude-other bash -c "eval \"\$1\"; claude -p hi" _ "$init"
+  assert_eq "$(cat "$STUB_OUT")" "$HOME/.claude-other|-p hi"
+  bash -c "eval \"\$1\"; claude -p hi" _ "$init"
+  assert_eq "$(cat "$STUB_OUT")" "$HOME/.claude-work|-p hi"
 }
 
 test_requires_main_login() {
