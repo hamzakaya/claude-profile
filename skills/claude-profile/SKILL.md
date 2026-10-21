@@ -17,7 +17,7 @@ This session is already running as one account, and that can't change mid-sessio
 
 - **You can run:** `install`, `list`, `which`, `status`, `sessions`, `doctor`, `config`, `default`, `sync`, `version`, `help`.
 - **The user must run in their own terminal:** `add`, `login`, `setup-token` (never ask for the token in chat), `rename` (these open a browser for OAuth) and anything that *starts* Claude (`claude-profile <name>`, `claude-<name>`, the menu). If they want to stay here, they can type `! claude-profile add <name>`; if the login doesn't complete, use a separate terminal.
-- **Tired of logging in again?** Suggest `claude-profile setup-token <name>` (in their terminal): it saves a one-year token in the profile and the profile starts with it, no email code. `list` then shows *token login*.
+- **Tired of logging in again?** Suggest `claude-profile setup-token <name>` (in their terminal): it saves a one-year token in the profile and the profile starts with it, no email code. `list` then shows *token login*. `/usage` needs the regular login: `claude-profile <name> --login`.
 - **`rm` only after the user explicitly confirms the profile name in this conversation.** It asks `[y/N]` on stdin; pipe `y` only then: `echo y | claude-profile rm <name>`.
 
 ## Install

@@ -160,6 +160,7 @@ claude-profile              # interactive menu
 claude-profile                        interactive menu (↑↓/jk, enter, 1-9, q)
 claude-profile <name> [claude args]   start claude with a profile (= use <name> ...)
 claude-profile -c | -r <id> ...       start claude with the default profile
+claude-profile <name> --login ...     same, with the regular login instead of a saved token
 ```
 
 Anything after the profile name goes straight to `claude`, so every Claude Code flag works:
@@ -206,6 +207,7 @@ claude-work                          # starts with the token, no login
 - Starting the profile (`claude-profile work`, `claude-work`, the menu, or plain `claude` when it's the default) passes it to Claude Code as `CLAUDE_CODE_OAUTH_TOKEN`. It wins over a regular login and over a token already set in your shell. Other profiles don't get it.
 - Already have a token? Pipe it in: `pbpaste | claude-profile setup-token work`, or `claude-profile setup-token work < token.txt`.
 - New profile with a token straight away: `claude-profile add work --token`.
+- A setup-token can only chat: `/usage` (and the Usage tab of `/status`) and Remote Control need permissions it doesn't have. For those, start with the regular login once: `claude-profile work --login` (or `claude --login` for the default profile). If that login has expired, you log in again as usual.
 - `list` shows *token login* for a profile that only has a token. Remove it with `claude-profile setup-token work --remove` (or `logout`). After a year, run `setup-token` again.
 - For the main profile as default, reload your shell (`exec $SHELL`) after saving its first token, so plain `claude` picks it up.
 

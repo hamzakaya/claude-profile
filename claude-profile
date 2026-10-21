@@ -9,6 +9,8 @@
 #   claude-profile <name> [claude args]   start claude with a profile (= use <name> ...)
 #       claude-profile work -c            continue the latest conversation here as "work"
 #       claude-profile personal -r <id>   resume a specific session as "personal"
+#       claude-profile work --login ...   this once, the regular login instead of a saved token
+#                                         (e.g. for /usage, which a setup-token can't read)
 #   claude-profile -c | -r <id> ...       start claude with the default profile
 #   claude-profile list | which           list profiles | show this shell's profile
 #   claude-profile add <name> [--token]   create a profile and log in (or save a setup-token)
@@ -364,8 +366,10 @@ cmd_add() {
 }
 
 # CLAUDE_PROFILE_OPEN overrides the `open` setting (used by the menu and shell-init).
+# A leading --login skips the saved token, and one inherited from the shell, for this start.
 cmd_use() {
-  need "${1:-}"; local n=$1; shift
+  need "${1:-}"; local n=$1 run=with_login; shift
+  if [[ ${1:-} == --login ]]; then shift; run=with_profile; unset CLAUDE_CODE_OAUTH_TOKEN; fi
   need_claude
   if [[ $n != "$MAIN_NAME" ]]; then
     link_shared "$(dir_for "$n")"
@@ -382,7 +386,7 @@ cmd_use() {
     esac
   fi
   unset CLAUDE_PROFILE_OPEN   # don't leak into the claude session's environment
-  with_login "$n" exec claude "$@"
+  "$run" "$n" exec claude "$@"
 }
 
 cmd_login()  { need "${1:-}"; need_claude; with_profile "$1" claude auth login; }

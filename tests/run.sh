@@ -262,6 +262,14 @@ test_setup_token_saved_and_used() {
   assert_eq "$(cat "$STUB_OUT.token")" "sk-ant-oat01-Abc_1-x"
   # Other profiles don't get it.
   run main; assert_eq "$(cat "$STUB_OUT.token")" "<unset>"
+  # --login: the regular login this once, and --login isn't passed to claude.
+  CLAUDE_CODE_OAUTH_TOKEN=other run work --login -c; assert_ok
+  assert_eq "$(cat "$STUB_OUT")" "$HOME/.claude-work|-c"
+  assert_eq "$(cat "$STUB_OUT.token")" "<unset>"
+  "$CP" default work >/dev/null
+  run --login; assert_ok
+  assert_eq "$(cat "$STUB_OUT")" "$HOME/.claude-work|"
+  assert_eq "$(cat "$STUB_OUT.token")" "<unset>"
   "$CP" logout work >/dev/null
   run list; assert_out "work             not logged in"
   printf 'sk-ant-oat01-y\n' | "$CP" setup-token work >/dev/null 2>&1
