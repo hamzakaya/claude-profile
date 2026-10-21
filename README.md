@@ -160,6 +160,7 @@ claude-profile              # interactive menu
 claude-profile                        interactive menu (↑↓/jk, enter, 1-9, q)
 claude-profile <name> [claude args]   start claude with a profile (= use <name> ...)
 claude-profile -c | -r <id> ...       start claude with the default profile
+claude-profile <name> --login ...     same, with the regular login instead of a saved token
 ```
 
 Anything after the profile name goes straight to `claude`, so every Claude Code flag works:
@@ -176,11 +177,12 @@ claude-profile work -p "summarize"     # print mode
 |---|---|
 | `list` (`ls`) | List profiles with their logged-in account. `●` = this shell, `★` = default |
 | `which` (`current`) | Show the profile this shell is using |
-| `add <name>` (`new`) | Create a profile and log in. Names: lowercase letters, digits, dashes |
+| `add <name> [--token]` (`new`) | Create a profile and log in (`--token`: save a [setup-token](#long-lived-tokens) instead). Names: lowercase letters, digits, dashes |
 | `default [name]` | Show or set the profile that plain `claude` uses |
 | `sessions [n]` (`s`) | The last *n* (default 10) conversations in this directory, with their first message |
 | `status [name]` | Check login status of all profiles (in parallel) or one |
-| `login <name>` / `logout <name>` | Refresh or remove a profile's login |
+| `login <name>` / `logout <name>` | Refresh or remove a profile's login (`logout` also deletes a saved token) |
+| `setup-token <name> [--remove]` | Save a one-year token from `claude setup-token` in the profile, so it starts without logging in again. See [below](#long-lived-tokens) |
 | `rename <old> <new>` (`mv`) | Rename a profile. You'll log in again, because the macOS Keychain entry is tied to the directory |
 | `rm <name>` (`remove`) | Delete a profile after confirming. Shared history is kept |
 | `sync [name]` | Copy MCP servers and project settings from the main profile |
@@ -190,6 +192,26 @@ claude-profile work -p "summarize"     # print mode
 | `version` · `help` | Version · built-in help |
 
 Set `NO_COLOR=1` to turn off colors.
+
+### Long-lived tokens
+
+Tired of logging in again (email → code) every time a login expires? `claude setup-token` creates an OAuth token that lasts a year. `claude-profile` can save one per profile and start that profile with it:
+
+```sh
+claude-profile setup-token work      # a browser opens once: pick the work account,
+                                     # then paste the token it prints
+claude-work                          # starts with the token, no login
+```
+
+- The token is saved as `.oauth-token` in the profile's directory (`~/.claude-work/.oauth-token`, or `~/.claude/.oauth-token` for the main profile), readable only by you (mode 600).
+- Starting the profile (`claude-profile work`, `claude-work`, the menu, or plain `claude` when it's the default) passes it to Claude Code as `CLAUDE_CODE_OAUTH_TOKEN`. It wins over a regular login and over a token already set in your shell. Other profiles don't get it.
+- Already have a token? Pipe it in: `pbpaste | claude-profile setup-token work`, or `claude-profile setup-token work < token.txt`.
+- New profile with a token straight away: `claude-profile add work --token`.
+- A setup-token can only chat: `/usage` (and the Usage tab of `/status`) and Remote Control need permissions it doesn't have. For those, start with the regular login once: `claude-profile work --login` (or `claude --login` for the default profile). If that login has expired, you log in again as usual.
+- `list` shows *token login* for a profile that only has a token. Remove it with `claude-profile setup-token work --remove` (or `logout`). After a year, run `setup-token` again.
+- For the main profile as default, reload your shell (`exec $SHELL`) after saving its first token, so plain `claude` picks it up.
+
+A token you set yourself in the shell (`export CLAUDE_CODE_OAUTH_TOKEN=…`) applies to every profile that has no saved token, so they would all run as that account. `doctor` and `status` warn about this.
 
 ## Settings
 
@@ -236,6 +258,7 @@ Starting a profile sets `CLAUDE_CONFIG_DIR=~/.claude-<name>` and `exec`s `claude
 
 **Per profile**:
 - the login: the macOS Keychain entry, or `.credentials.json` on Linux;
+- `.oauth-token`: a saved [setup-token](#long-lived-tokens), if you made one;
 - `.claude.json`: account info, MCP servers, per-project permissions and trust.
 
 When you create a profile, it starts with a copy of the main profile's MCP servers and project settings. Use `sync` (or `auto-sync on`) to pull in later changes. In the merge, the profile keeps its own project entries, and for MCP servers with the same name, main wins.
@@ -305,7 +328,7 @@ Bug reports and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIB
 
 ## Security
 
-The script never reads or copies credentials; logins go through `claude auth`. See [SECURITY.md](SECURITY.md) for what it touches and how to report a vulnerability privately.
+Logins go through `claude auth`; the script never reads or copies them. The only credential it handles is a token you save with `setup-token`, kept mode 600 in that profile. See [SECURITY.md](SECURITY.md) for what it touches and how to report a vulnerability privately.
 
 ## License
 
