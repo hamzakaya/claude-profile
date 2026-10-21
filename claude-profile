@@ -17,6 +17,7 @@
 #   claude-profile sessions [n]           last n sessions in this directory
 #   claude-profile status [name]          login status (all profiles in parallel, or one)
 #   claude-profile login | logout <name>  refresh / remove a profile's login
+#   claude-profile setup-token <name>     long-lived token for CI (claude setup-token)
 #   claude-profile rename <old> <new>     rename a profile (you'll log in again)
 #   claude-profile rm <name>              delete a profile (asks first; history is kept)
 #   claude-profile sync [name]            copy MCP servers + project settings from main
@@ -44,7 +45,7 @@ MARK=.claude-profile   # only ~/.claude-* directories containing this file count
 SHARED=(projects settings.json agents commands skills hooks rules plugins plans output-styles
         file-history history.jsonl paste-cache tasks todos keybindings.json CLAUDE.md)
 KEYS=(main default open auto-sync share)
-RESERVED=" list ls which current add new use default config sessions s status login logout rename mv rm remove sync doctor shell-init help profile version "
+RESERVED=" list ls which current add new use default config sessions s status login logout setup-token rename mv rm remove sync doctor shell-init help profile version "
 
 # ── output ─────────────────────────────────────────────────────────────────────────
 if [[ -t 1 && -z ${NO_COLOR:-} ]]; then
@@ -372,10 +373,24 @@ cmd_use() {
 cmd_login()  { need "${1:-}"; need_claude; with_profile "$1" claude auth login; }
 cmd_logout() { need "${1:-}"; need_claude; with_profile "$1" claude auth logout; }
 
+# `claude setup-token` prints a one-year OAuth token for CLAUDE_CODE_OAUTH_TOKEN (CI, scripts,
+# headless machines). It is shown once and never stored here; the profile's login is unchanged.
+cmd_setup_token() {
+  need "${1:-}"; need_claude
+  info "Pick the '$1' account in the browser. Store the token as CLAUDE_CODE_OAUTH_TOKEN (e.g. a CI secret)."
+  with_profile "$1" claude setup-token
+}
+
+# CLAUDE_CODE_OAUTH_TOKEN takes precedence over every profile's login, so all profiles would
+# run as the token's account.
+env_token_set() { [[ -n ${CLAUDE_CODE_OAUTH_TOKEN:-} && -z ${CLAUDECODE:-} ]]; }
+ENV_TOKEN_MSG="CLAUDE_CODE_OAUTH_TOKEN is set in this shell: it overrides every profile's login (unset it to switch accounts)"
+
 cmd_status() {
   local -a list
   local p tmp out logged method
   need_claude
+  if env_token_set; then warn "$ENV_TOKEN_MSG"; fi
   # shellcheck disable=SC2207  # profile names are validated: no spaces or globs
   if [[ -n ${1:-} ]]; then need "$1"; list=("$1"); else list=($(profiles)); fi
   tmp=$(mktemp -d)
@@ -449,6 +464,7 @@ cmd_doctor() {
   done
   if [[ -n $hooked ]]; then ok "shell-init found in $hooked"
   else warn "add to your shell rc: eval \"\$($PROG shell-init)\""; issues=$((issues+1)); fi
+  if env_token_set; then warn "$ENV_TOKEN_MSG"; issues=$((issues+1)); fi
 
   printf '%sSettings%s\n' "$B" "$R"
   if [[ -n $DEF ]] && ! exists "$DEF"; then warn "default='$DEF' doesn't exist → using main"; issues=$((issues+1)); fi
@@ -575,6 +591,7 @@ case ${1:-} in
   config)         shift; cmd_config "$@" ;;
   login)          shift; cmd_login "$@" ;;
   logout)         shift; cmd_logout "$@" ;;
+  setup-token)    shift; cmd_setup_token "$@" ;;
   status)         shift; cmd_status "$@" ;;
   rename|mv)      shift; cmd_rename "$@" ;;
   rm|remove)      shift; cmd_rm "$@" ;;

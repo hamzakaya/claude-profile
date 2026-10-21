@@ -16,7 +16,7 @@ Full docs: https://github.com/hamzakaya/claude-profile
 This session is already running as one account, and that can't change mid-session.
 
 - **You can run:** `install`, `list`, `which`, `status`, `sessions`, `doctor`, `config`, `default`, `sync`, `version`, `help`.
-- **The user must run in their own terminal:** `add`, `login`, `rename` (these open a browser for OAuth) and anything that *starts* Claude (`claude-profile <name>`, `claude-<name>`, the menu). If they want to stay here, they can type `! claude-profile add <name>`; if the login doesn't complete, use a separate terminal.
+- **The user must run in their own terminal:** `add`, `login`, `setup-token`, `rename` (these open a browser for OAuth) and anything that *starts* Claude (`claude-profile <name>`, `claude-<name>`, the menu). If they want to stay here, they can type `! claude-profile add <name>`; if the login doesn't complete, use a separate terminal.
 - **`rm` only after the user explicitly confirms the profile name in this conversation.** It asks `[y/N]` on stdin; pipe `y` only then: `echo y | claude-profile rm <name>`.
 
 ## Install

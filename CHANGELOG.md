@@ -5,6 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- `setup-token <name>` runs `claude setup-token` for a profile, to create a long-lived token (`CLAUDE_CODE_OAUTH_TOKEN`) for that account. The token is shown once and never stored.
+- `doctor` and `status` warn when `CLAUDE_CODE_OAUTH_TOKEN` is set in the shell, because it overrides every profile's login.
+
 ## [1.0.1] - 2026-09-26
 
 ### Fixed

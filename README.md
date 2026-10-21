@@ -181,6 +181,7 @@ claude-profile work -p "summarize"     # print mode
 | `sessions [n]` (`s`) | The last *n* (default 10) conversations in this directory, with their first message |
 | `status [name]` | Check login status of all profiles (in parallel) or one |
 | `login <name>` / `logout <name>` | Refresh or remove a profile's login |
+| `setup-token <name>` | Create a long-lived token for that profile's account with `claude setup-token` (for CI and scripts, see [below](#long-lived-tokens)) |
 | `rename <old> <new>` (`mv`) | Rename a profile. You'll log in again, because the macOS Keychain entry is tied to the directory |
 | `rm <name>` (`remove`) | Delete a profile after confirming. Shared history is kept |
 | `sync [name]` | Copy MCP servers and project settings from the main profile |
@@ -190,6 +191,18 @@ claude-profile work -p "summarize"     # print mode
 | `version` · `help` | Version · built-in help |
 
 Set `NO_COLOR=1` to turn off colors.
+
+### Long-lived tokens
+
+`claude setup-token` creates a one-year OAuth token for your subscription, meant for CI, scripts and machines without a browser. `claude-profile setup-token <name>` runs it for a profile, so you can make one per account:
+
+```sh
+claude-profile setup-token work      # a browser opens: pick the work account
+```
+
+The token is printed once. `claude-profile` never stores it. Put it where it's needed as `CLAUDE_CODE_OAUTH_TOKEN`, for example a GitHub Actions secret. The profile's own login is not changed.
+
+`CLAUDE_CODE_OAUTH_TOKEN` takes precedence over every profile's login. If it's set in your shell, every profile runs as the token's account. `doctor` and `status` warn about this.
 
 ## Settings
 

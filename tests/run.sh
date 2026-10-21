@@ -16,7 +16,7 @@ PASS=0 FAIL=0
 setup() {
   T=$(mktemp -d)
   export HOME=$T/home XDG_CONFIG_HOME=$T/home/.config NO_COLOR=1
-  unset CLAUDE_CONFIG_DIR CLAUDECODE CLAUDE_PROFILE_OPEN
+  unset CLAUDE_CONFIG_DIR CLAUDECODE CLAUDE_PROFILE_OPEN CLAUDE_CODE_OAUTH_TOKEN
   mkdir -p "$HOME/.claude/projects" "$HOME/.claude/skills" "$T/bin"
   echo '{}' > "$HOME/.claude/settings.json"
   jq -n '{oauthAccount: {emailAddress: "main@example.com"},
@@ -248,6 +248,25 @@ test_rm_asks_and_keeps_history() {
   assert_file "$HOME/.claude/projects"
   run default; assert_eq "$OUT" main
   run rm main; assert_fail
+}
+
+test_setup_token_runs_with_profile_config_dir() {
+  "$CP" add work >/dev/null
+  run setup-token work; assert_ok; assert_out "CLAUDE_CODE_OAUTH_TOKEN"
+  assert_eq "$(cat "$STUB_OUT")" "$HOME/.claude-work|setup-token"
+  run setup-token main; assert_ok
+  assert_eq "$(cat "$STUB_OUT")" "|setup-token"
+  run setup-token;       assert_fail; assert_out "profile name required"
+  run setup-token ghost; assert_fail; assert_out "No such profile"
+  run add setup-token;   assert_fail; assert_out "command name"
+}
+
+test_env_token_warning() {
+  run doctor; assert_not_out "CLAUDE_CODE_OAUTH_TOKEN"
+  CLAUDE_CODE_OAUTH_TOKEN=x run doctor; assert_out "overrides every profile's login"
+  CLAUDE_CODE_OAUTH_TOKEN=x run status; assert_out "overrides every profile's login"
+  # Inside Claude Code the session's own token is expected.
+  CLAUDECODE=1 CLAUDE_CODE_OAUTH_TOKEN=x run doctor; assert_not_out "CLAUDE_CODE_OAUTH_TOKEN"
 }
 
 test_rename() {
