@@ -7,8 +7,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
-- `setup-token <name>` runs `claude setup-token` for a profile, to create a long-lived token (`CLAUDE_CODE_OAUTH_TOKEN`) for that account. The token is shown once and never stored.
-- `doctor` and `status` warn when `CLAUDE_CODE_OAUTH_TOKEN` is set in the shell, because it overrides every profile's login.
+- `setup-token <name>` runs `claude setup-token` for a profile and saves the token in it (`.oauth-token`, mode 600). The profile then starts with it as `CLAUDE_CODE_OAUTH_TOKEN`, so you don't have to log in again for a year. A token you already have can be piped in; `--remove` deletes it.
+- `add <name> --token` creates a profile with a saved token instead of `claude auth login`.
+- `doctor` and `status` warn when `CLAUDE_CODE_OAUTH_TOKEN` is set in the shell, because it overrides the login of every profile without a saved token.
+
+### Changed
+
+- `logout` also deletes a saved token. `rename` keeps it and skips the new login when there is one. With a saved token on the main profile, `shell-init` routes plain `claude` through `claude-profile` so the token is used.
 
 ## [1.0.1] - 2026-09-26
 

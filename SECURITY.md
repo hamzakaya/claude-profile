@@ -14,7 +14,8 @@ Include what you ran, what happened, and what an attacker could gain. You'll get
 
 Knowing this helps judge what's in scope:
 
-- **Credentials.** The script never reads, copies or prints OAuth tokens. Logins are done by `claude auth login` itself and stored where Claude Code puts them: the macOS Keychain, or `.credentials.json` inside the profile directory on Linux. `.credentials.json` and `.claude.json` can never be added to the `share` setting. `setup-token` runs `claude setup-token`, which prints its token straight to your terminal; the script doesn't capture or store it.
+- **Credentials.** Logins are done by `claude auth login` itself and stored where Claude Code puts them: the macOS Keychain, or `.credentials.json` inside the profile directory on Linux. The script never reads or copies those.
+- **Saved tokens.** The one exception: `setup-token` saves a token you paste (or pipe in) as `.oauth-token` in that profile's directory, created with mode 600 through `mktemp` + `mv`. Starting that profile reads it and passes it to `claude` as `CLAUDE_CODE_OAUTH_TOKEN` in the environment, never on the command line. It is never printed, never given to another profile, and deleted by `setup-token --remove`, `logout` and `rm`. `.credentials.json`, `.claude.json` and `.oauth-token` can never be added to the `share` setting.
 - **`.claude.json`.** Read with `jq` to show the logged-in email. Written only by `add` (initial copy of MCP servers and project settings from the main profile), `sync`, and `rename` (drops `oauthAccount`). Writes go through a temp file and `mv`.
 - **Deletes.** `rm` deletes only `~/.claude-<name>` directories that contain the `.claude-profile` marker, after a `[y/N]` prompt. Shared items are symlinks, so the real files in `~/.claude` are never removed.
 - **Shell code.** `shell-init` prints aliases and a `claude` function meant for `eval`. Profile names are limited to `[a-z0-9-]`, so they can't inject shell code.

@@ -11,13 +11,16 @@
 #       claude-profile personal -r <id>   resume a specific session as "personal"
 #   claude-profile -c | -r <id> ...       start claude with the default profile
 #   claude-profile list | which           list profiles | show this shell's profile
-#   claude-profile add <name>             create a profile and log in
+#   claude-profile add <name> [--token]   create a profile and log in (or save a setup-token)
 #   claude-profile default [name]         show / set the profile plain `claude` uses
 #   claude-profile config [key [value]]   show / change settings (see below)
 #   claude-profile sessions [n]           last n sessions in this directory
 #   claude-profile status [name]          login status (all profiles in parallel, or one)
 #   claude-profile login | logout <name>  refresh / remove a profile's login
-#   claude-profile setup-token <name>     long-lived token for CI (claude setup-token)
+#   claude-profile setup-token <name>     save a one-year token (claude setup-token) in the
+#                                         profile; it then starts with it, no browser login
+#       claude-profile setup-token <name> --remove   delete it again
+#       pbpaste | claude-profile setup-token <name>  save a token you already have
 #   claude-profile rename <old> <new>     rename a profile (you'll log in again)
 #   claude-profile rm <name>              delete a profile (asks first; history is kept)
 #   claude-profile sync [name]            copy MCP servers + project settings from main
@@ -42,6 +45,7 @@ MAIN_DIR="$HOME/.claude"
 MAIN_JSON="$HOME/.claude.json"
 CONF="${XDG_CONFIG_HOME:-$HOME/.config}/$PROG/config"
 MARK=.claude-profile   # only ~/.claude-* directories containing this file count as profiles
+TOKEN=.oauth-token     # saved `claude setup-token` token, passed as CLAUDE_CODE_OAUTH_TOKEN
 SHARED=(projects settings.json agents commands skills hooks rules plugins plans output-styles
         file-history history.jsonl paste-cache tasks todos keybindings.json CLAUDE.md)
 KEYS=(main default open auto-sync share)
@@ -77,7 +81,7 @@ fi
 [[ $MAIN_NAME =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "$CONF is invalid: main='$MAIN_NAME'"
 
 valid_share_item() {   # plain names inside ~/.claude; never the login files
-  [[ $1 =~ ^[A-Za-z0-9._-]+$ && $1 != . && $1 != .. && $1 != .credentials.json && $1 != .claude.json && $1 != "$MARK" ]]
+  [[ $1 =~ ^[A-Za-z0-9._-]+$ && $1 != . && $1 != .. && $1 != .credentials.json && $1 != .claude.json && $1 != "$MARK" && $1 != "$TOKEN" ]]
 }
 for item in $SHARE; do
   if valid_share_item "$item"; then SHARED+=("$item"); else warn "share: ignoring '$item'"; fi
@@ -95,6 +99,7 @@ save_cfg() {
 dir_for()  { if [[ $1 == "$MAIN_NAME" ]]; then echo "$MAIN_DIR"; else echo "$HOME/.claude-$1"; fi; }
 json_for() { if [[ $1 == "$MAIN_NAME" ]]; then echo "$MAIN_JSON"; else echo "$HOME/.claude-$1/.claude.json"; fi; }
 exists()   { [[ $1 == "$MAIN_NAME" || -f $HOME/.claude-$1/$MARK ]]; }
+token_for() { echo "$(dir_for "$1")/$TOKEN"; }
 
 profiles() {
   local d
@@ -124,10 +129,11 @@ default_profile() {
   if [[ -n $DEF ]] && exists "$DEF"; then echo "$DEF"; else echo "$MAIN_NAME"; fi
 }
 
-account_of() {   # logged-in email, or empty
-  local f; f=$(json_for "$1")
-  [[ -f $f ]] || return 0
-  jq -r '.oauthAccount.emailAddress // empty' "$f" 2>/dev/null || true
+account_of() {   # logged-in email, "token login" for a saved token, or empty
+  local f acc=''; f=$(json_for "$1")
+  if [[ -f $f ]]; then acc=$(jq -r '.oauthAccount.emailAddress // empty' "$f" 2>/dev/null || true); fi
+  if [[ -z $acc && -f $(token_for "$1") ]]; then acc="token login"; fi
+  echo "$acc"
 }
 
 current() {
@@ -145,6 +151,13 @@ with_profile() {
   if [[ $name == "$MAIN_NAME" ]]; then unset CLAUDE_CONFIG_DIR
   else CLAUDE_CONFIG_DIR=$(dir_for "$name"); export CLAUDE_CONFIG_DIR; fi
   "$@"
+}
+
+# Same, plus the profile's saved token (if any): it takes precedence over the regular login.
+with_login() {
+  local f; f=$(token_for "$1")
+  if [[ -f $f ]]; then CLAUDE_CODE_OAUTH_TOKEN=$(<"$f"); export CLAUDE_CODE_OAUTH_TOKEN; fi
+  with_profile "$@"
 }
 
 # Link shared items; also picks up items created in ~/.claude later. Never touches real files.
@@ -337,14 +350,16 @@ cmd_which() {
 }
 
 cmd_add() {
-  local name=${1:-}
-  [[ -n $name ]] || die "usage: $PROG add <name>"
+  local name=${1:-} opt=${2:-}
+  [[ -n $name ]] || die "usage: $PROG add <name> [--token]"
+  [[ -z $opt || $opt == --token ]] || die "usage: $PROG add <name> [--token]"
   valid_name "$name"; need_claude
   exists "$name" && die "Already exists: $name  (to log in: $PROG login $name)"
   [[ -e $(dir_for "$name") ]] && die "$(dir_for "$name") exists but isn't a profile. '$PROG doctor' adopts it if it looks like one."
   make_profile "$name"
   info "Created $(dir_for "$name") — pick the '$name' account in the browser."
-  with_profile "$name" claude auth login
+  if [[ -n $opt ]]; then cmd_setup_token "$name"
+  else with_profile "$name" claude auth login; fi
   ok "Ready → $PROG $name   (in a new shell: claude-$name)"
 }
 
@@ -367,18 +382,46 @@ cmd_use() {
     esac
   fi
   unset CLAUDE_PROFILE_OPEN   # don't leak into the claude session's environment
-  with_profile "$n" exec claude "$@"
+  with_login "$n" exec claude "$@"
 }
 
 cmd_login()  { need "${1:-}"; need_claude; with_profile "$1" claude auth login; }
-cmd_logout() { need "${1:-}"; need_claude; with_profile "$1" claude auth logout; }
-
-# `claude setup-token` prints a one-year OAuth token for CLAUDE_CODE_OAUTH_TOKEN (CI, scripts,
-# headless machines). It is shown once and never stored here; the profile's login is unchanged.
-cmd_setup_token() {
+cmd_logout() {
   need "${1:-}"; need_claude
-  info "Pick the '$1' account in the browser. Store the token as CLAUDE_CODE_OAUTH_TOKEN (e.g. a CI secret)."
-  with_profile "$1" claude setup-token
+  if [[ -f $(token_for "$1") ]]; then rm -f "$(token_for "$1")"; ok "Removed the saved token of $1"; fi
+  with_profile "$1" claude auth logout
+}
+
+# `claude setup-token` prints a one-year OAuth token. It's saved in the profile (mode 600) and
+# passed to claude as CLAUDE_CODE_OAUTH_TOKEN, so the profile starts without a browser login.
+# With stdin not a terminal, an existing token is read from it instead.
+cmd_setup_token() {
+  local name=${1:-} f tok='' tmp
+  need "$name"; f=$(token_for "$name")
+  case ${2:-} in
+    --remove) rm -f "$f"; ok "Removed the saved token of $name"; return 0 ;;
+    '') ;;
+    *) die "usage: $PROG setup-token <name> [--remove]" ;;
+  esac
+  if [[ -t 0 ]]; then
+    need_claude
+    info "Pick the '$name' account in the browser, then paste the token it prints."
+    with_profile "$name" claude setup-token
+    while [[ -z ${tok//[[:space:]]/} ]]; do   # an empty line asks again
+      printf '%sPaste the token (hidden):%s ' "$EB" "$ER" >&2
+      IFS= read -rs tok || { echo >&2; break; }; echo >&2
+    done
+  else
+    IFS= read -r tok || true
+  fi
+  tok=${tok//[[:space:]]/}
+  [[ $tok =~ ^sk-ant-[A-Za-z0-9_-]+$ ]] || die "That doesn't look like a token (sk-ant-…). Nothing saved."
+  tmp=$(mktemp "$f.XXXXXX")   # mktemp creates it with mode 600
+  printf '%s\n' "$tok" > "$tmp"; mv "$tmp" "$f"
+  ok "Saved in $f. '$PROG $name' now starts with this token (valid for a year)."
+  if [[ $name == "$MAIN_NAME" && $(default_profile) == "$MAIN_NAME" ]]; then
+    info "Plain 'claude' uses it in new shells (or: exec \$SHELL)."
+  fi
 }
 
 # CLAUDE_CODE_OAUTH_TOKEN takes precedence over every profile's login, so all profiles would
@@ -395,7 +438,7 @@ cmd_status() {
   if [[ -n ${1:-} ]]; then need "$1"; list=("$1"); else list=($(profiles)); fi
   tmp=$(mktemp -d)
   for p in "${list[@]}"; do   # starting claude is slow → run in parallel
-    ( with_profile "$p" claude auth status > "$tmp/$p" 2>&1 || true ) &
+    ( with_login "$p" claude auth status > "$tmp/$p" 2>&1 || true ) &
   done
   wait
   for p in "${list[@]}"; do
@@ -425,6 +468,7 @@ cmd_rename() {
   j=$(json_for "$new")
   if [[ -f $j ]]; then jq 'del(.oauthAccount)' "$j" > "$j.tmp" && mv "$j.tmp" "$j"; fi
   if [[ $DEF == "$old" ]]; then DEF=$new; save_cfg; fi
+  if [[ -f $(token_for "$new") ]]; then ok "$old → $new (the saved token moved with it)"; return 0; fi
   ok "$old → $new. Log in again:"
   with_profile "$new" claude auth login
 }
@@ -569,10 +613,13 @@ cmd_shell_init() {
   echo "unset -f claude 2>/dev/null || true"
   if [[ $def != "$MAIN_NAME" ]]; then
     echo "if [ -z \"\${CLAUDECODE:-}\" ]; then export CLAUDE_CONFIG_DIR='$(dir_for "$def")'; fi"
-    # Plain `claude` in a terminal goes through this script (links + auto-sync) with open=new.
-    echo "function claude { if [ -n \"\${CLAUDECODE:-}\" ]; then command claude \"\$@\"; else CLAUDE_PROFILE_OPEN=new command '$self' use '$def' \"\$@\"; fi; }"
   else
     echo "if [ -z \"\${CLAUDECODE:-}\" ]; then case \${CLAUDE_CONFIG_DIR:-} in '$HOME'/.claude-*) unset CLAUDE_CONFIG_DIR ;; esac; fi"
+  fi
+  # Plain `claude` in a terminal goes through this script (links, auto-sync, saved token) with
+  # open=new. Not needed for a main profile without a token: plain claude already is that.
+  if [[ $def != "$MAIN_NAME" || -f $(token_for "$def") ]]; then
+    echo "function claude { if [ -n \"\${CLAUDECODE:-}\" ]; then command claude \"\$@\"; else CLAUDE_PROFILE_OPEN=new command '$self' use '$def' \"\$@\"; fi; }"
   fi
 }
 

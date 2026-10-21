@@ -24,7 +24,7 @@ setup() {
           hasCompletedOnboarding: true}' > "$HOME/.claude.json"
   # Fake claude: `auth login|logout|status` edit the profile's .claude.json; anything
   # else records its arguments and config dir to $STUB_OUT, and CLAUDE_PROFILE_OPEN (which
-  # must not leak into the session) to $STUB_OUT.env.
+  # must not leak into the session) to $STUB_OUT.env, and CLAUDE_CODE_OAUTH_TOKEN to $STUB_OUT.token.
   cat > "$T/bin/claude" <<'STUB'
 #!/usr/bin/env bash
 j=${CLAUDE_CONFIG_DIR:+$CLAUDE_CONFIG_DIR/.claude.json}; j=${j:-$HOME/.claude.json}
@@ -34,7 +34,8 @@ case "$1 ${2:-}" in
   "auth logout") jq 'del(.oauthAccount)' "$j" > "$j.t" && mv "$j.t" "$j" ;;
   "auth status") jq -c '{loggedIn: (.oauthAccount != null), authMethod: "oauth"}' "$j" ;;
   *) printf '%s|%s\n' "${CLAUDE_CONFIG_DIR:-}" "$*" > "$STUB_OUT"
-     printf '%s\n' "${CLAUDE_PROFILE_OPEN-<unset>}" > "$STUB_OUT.env" ;;
+     printf '%s\n' "${CLAUDE_PROFILE_OPEN-<unset>}" > "$STUB_OUT.env"
+     printf '%s\n' "${CLAUDE_CODE_OAUTH_TOKEN-<unset>}" > "$STUB_OUT.token" ;;
 esac
 STUB
   chmod +x "$T/bin/claude"
@@ -250,15 +251,50 @@ test_rm_asks_and_keeps_history() {
   run rm main; assert_fail
 }
 
-test_setup_token_runs_with_profile_config_dir() {
+test_setup_token_saved_and_used() {
   "$CP" add work >/dev/null
-  run setup-token work; assert_ok; assert_out "CLAUDE_CODE_OAUTH_TOKEN"
-  assert_eq "$(cat "$STUB_OUT")" "$HOME/.claude-work|setup-token"
-  run setup-token main; assert_ok
-  assert_eq "$(cat "$STUB_OUT")" "|setup-token"
-  run setup-token;       assert_fail; assert_out "profile name required"
-  run setup-token ghost; assert_fail; assert_out "No such profile"
-  run add setup-token;   assert_fail; assert_out "command name"
+  OUT=$(printf '  sk-ant-oat01-Abc_1-x \n' | "$CP" setup-token work 2>&1) || fail "$OUT"
+  f=$HOME/.claude-work/.oauth-token
+  assert_eq "$(cat "$f")" "sk-ant-oat01-Abc_1-x"
+  [[ $(ls -l "$f") == -rw-------* ]] || fail "token file is not mode 600: $(ls -l "$f")"
+  # Starting the profile passes the token, even over one inherited from the shell.
+  CLAUDE_CODE_OAUTH_TOKEN=other run work -c; assert_ok
+  assert_eq "$(cat "$STUB_OUT.token")" "sk-ant-oat01-Abc_1-x"
+  # Other profiles don't get it.
+  run main; assert_eq "$(cat "$STUB_OUT.token")" "<unset>"
+  "$CP" logout work >/dev/null
+  run list; assert_out "work             not logged in"
+  printf 'sk-ant-oat01-y\n' | "$CP" setup-token work >/dev/null 2>&1
+  run list; assert_out "token login"
+  run setup-token work --remove; assert_ok; assert_no_file "$f"
+}
+
+test_setup_token_rejects_bad_input() {
+  "$CP" add work >/dev/null
+  OUT=$(echo 'hello world' | "$CP" setup-token work 2>&1) && fail "accepted junk"
+  assert_out "doesn't look like a token"; assert_no_file "$HOME/.claude-work/.oauth-token"
+  run setup-token;            assert_fail; assert_out "profile name required"
+  run setup-token ghost;      assert_fail; assert_out "No such profile"
+  run setup-token work --bad; assert_fail; assert_out "usage"
+  run add setup-token;        assert_fail; assert_out "command name"
+  run config share .oauth-token; assert_fail
+}
+
+test_add_with_token() {
+  OUT=$(echo 'sk-ant-oat01-z' | "$CP" add work --token 2>&1) || fail "$OUT"
+  assert_eq "$(cat "$HOME/.claude-work/.oauth-token")" "sk-ant-oat01-z"
+  assert_eq "$(jq -r '.oauthAccount // "none"' "$HOME/.claude-work/.claude.json")" none  # no auth login
+  run rename work job; assert_ok; assert_out "token moved"
+  assert_eq "$(cat "$HOME/.claude-job/.oauth-token")" "sk-ant-oat01-z"
+}
+
+test_shell_init_main_with_token() {
+  run shell-init; assert_not_out "function claude {"
+  echo 'sk-ant-oat01-m' | "$CP" setup-token main >/dev/null 2>&1
+  init=$("$CP" shell-init); assert_eq "$(grep -c 'function claude {' <<<"$init")" 1
+  bash -c "eval \"\$1\"; claude -p hi" _ "$init"
+  assert_eq "$(cat "$STUB_OUT")" "|-p hi"
+  assert_eq "$(cat "$STUB_OUT.token")" "sk-ant-oat01-m"
 }
 
 test_env_token_warning() {
